@@ -5,7 +5,7 @@
 *.vsix
 
 build/*
-bin/*
+
 
 */CMakeFiles/*
 */cmake_install.cmake

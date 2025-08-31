@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 project(XPilotBOT)
 
-# Put executables under <source>/build
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../build")
+# Put executables under <source>/bin
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../bin")
 # For multi-config generators (VS/Xcode), mirror the same dir:
 foreach(cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
-  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${cfg} "${CMAKE_CURRENT_SOURCE_DIR}/../build")
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${cfg} "${CMAKE_CURRENT_SOURCE_DIR}/build")
 endforeach()
 
 #set(CAI_INCLUDE_DIR "$ENV{HOME}/xpilot-ai/library/c"  CACHE PATH "Path to cAI headers")
@@ -41,5 +41,3 @@ set_target_properties(Spinner PROPERTIES
 # Nice-to-have warnings / standard
 set(CMAKE_C_STANDARD 99)
 target_compile_options(Spinner PRIVATE -Wall -Wextra -Wpedantic)
-
-

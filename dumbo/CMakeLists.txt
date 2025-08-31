@@ -5,7 +5,7 @@ project(XPilotBOT)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../bin")
 # For multi-config generators (VS/Xcode), mirror the same dir:
 foreach(cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
-  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${cfg} "${CMAKE_CURRENT_SOURCE_DIR}/../build")
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${cfg} "${CMAKE_CURRENT_SOURCE_DIR}/build")
 endforeach()
 
 #set(CAI_INCLUDE_DIR "$ENV{HOME}/xpilot-ai/library/c"  CACHE PATH "Path to cAI headers")
