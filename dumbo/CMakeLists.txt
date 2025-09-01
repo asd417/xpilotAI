@@ -11,7 +11,7 @@ endforeach()
 #set(CAI_INCLUDE_DIR "$ENV{HOME}/xpilot-ai/library/c"  CACHE PATH "Path to cAI headers")
 #set(CAI_LIB_DIR     "$ENV{HOME}/xpilot-ai/binaries" CACHE PATH "Path to folder containing libcAI.so")
 set(CAI_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../include"  CACHE PATH "Path to cAI headers")
-set(CAI_LIB_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/../lib" CACHE PATH "Path to folder containing libcAI.so")
+set(CAI_LIB_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/../bin" CACHE PATH "Path to folder containing libcAI.so")
 
 find_library(CAI_LIBRARY
   NAMES cAI libcAI
