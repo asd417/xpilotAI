@@ -23,6 +23,7 @@
 #endif
 
 int AI_loop() {
+  setTurnSpeedDeg(20);
   int aimDir = aimdir(0);
   //Release keys
   //Set variables
@@ -87,7 +88,7 @@ int AI_loop() {
   }
   else if(headingTrackingDiff > 85 && headingTrackingDiff < 275 && trackWall < 100 && frontWall > 200)
   {
-    THRUSTDEBUG(AR(printf("thrusters type 3\n")));
+   setTurnSpeedDeg THRUSTDEBUG(AR(printf("thrusters type 3\n")));
     shouldThrust = 1;
   }
 
@@ -104,13 +105,13 @@ int AI_loop() {
     TURNDEBUG(AR(printf("Turning reverse\n")));
     turnDir = 1;
   }
-  else if(selfSpeed() > 1 && closest < 150 && closest_angle > 2 && closest_angle <= 180)
+  else if(selfSpeed() > 1 && closest < 100 && closest_angle > 2 && closest_angle <= 180)
   {
     TURNDEBUG(AR(printf("Turning away\n")));
     turnDir = 1;
   }
   //if the ship is already facing the furthest area, then turn away from nearby geometries
-  else if(selfSpeed() > 1 && closest < 150 && closest_angle < 358 && closest_angle > 180)
+  else if(selfSpeed() > 1 && closest < 100 && closest_angle < 358 && closest_angle > 180)
   {
     TURNDEBUG(AR(printf("Turning away\n")));
     turnDir = -1;
@@ -147,7 +148,7 @@ int AI_loop() {
   }
   //printf("ship angle: %f turning to %d", heading, aimDir);
   
-  if(backWall > 50 && aimDir == heading)
+  if(backWall > 50)
   {
     fireShot(1);
   }
