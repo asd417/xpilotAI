@@ -6,8 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define DEBUGTURN
-//#define DEBUGTHRUST
+//#define DEBUGTURN
+#define DEBUGTHRUST
 //Alive run, only run when alive
 #define AR(x) if(selfAlive()){x;}
 #ifdef DEBUGTURN
@@ -67,12 +67,17 @@ int AI_loop() {
       closest_angle = i;
     }
   }
-
   int headingTrackingDiff = (int)(heading + 360 - tracking) % 360;
   int headingAimingDiff = (int)(heading + 360 - aimDir) % 360;
+  int shotDanger = shotAlert(0);
   //printf("heading %f, tracking %f, diff: %d, trackWall: %f\n", heading, tracking, headingTrackingDiff, trackWall);
   //Thrust rules
-  if((furthest_angle == 0) && selfSpeed() < 6 && frontWall > 200)
+  if(shotDanger > 0 && shotDanger < 200 && frontWall > 200)
+  {
+    THRUSTDEBUG(AR(printf("avoiding shot: %d\n", shotDanger)));
+    shouldThrust = 1;
+  }
+  else if((furthest_angle == 0) && selfSpeed() < 6 && frontWall > 200)
   {
     THRUSTDEBUG(AR(printf("propulsion\n")));
     shouldThrust = 1;
