@@ -69,6 +69,7 @@ int AI_loop() {
   }
 
   int headingTrackingDiff = (int)(heading + 360 - tracking) % 360;
+  int headingAimingDiff = (int)(heading + 360 - aimDir) % 360;
   //printf("heading %f, tracking %f, diff: %d, trackWall: %f\n", heading, tracking, headingTrackingDiff, trackWall);
   //Thrust rules
   if((furthest_angle == 0) && selfSpeed() < 6 && frontWall > 200)
@@ -88,22 +89,50 @@ int AI_loop() {
   }
   else if(headingTrackingDiff > 85 && headingTrackingDiff < 275 && trackWall < 100 && frontWall > 200)
   {
-   setTurnSpeedDeg THRUSTDEBUG(AR(printf("thrusters type 3\n")));
+    THRUSTDEBUG(AR(printf("thrusters type 3\n")));
+    shouldThrust = 1;
+  }
+  else if(wall5 < 70 && frontWall > 250)
+  {
+    THRUSTDEBUG(AR(printf("thrusters type4\n")));
+    shouldThrust = 1;
+  }
+  else if(wall7 < 70 && frontWall > 250)
+  {
+    THRUSTDEBUG(AR(printf("thrusters type5\n")));
     shouldThrust = 1;
   }
 
+  //AR(printf("headingTrackingDiff: %d\n", headingTrackingDiff));
   //Turn rules
   //Speed too fast, turn to face against tracking direction
-  if(selfSpeed() > 7 && headingTrackingDiff < 160)
+  if(selfSpeed() > 9 && headingTrackingDiff < 175)
   {
     TURNDEBUG(AR(printf("Turning reverse\n")));
     turnDir = -1;
   }
   //Speed too fast, turn to face against tracking direction
-  else if(selfSpeed() > 7 && headingTrackingDiff > 200)
+  else if(selfSpeed() > 9 && headingTrackingDiff > 185)
   {
     TURNDEBUG(AR(printf("Turning reverse\n")));
     turnDir = 1;
+  }
+  // aim at enemy
+  else if(closest > 70 && aimDir > 0 && headingAimingDiff < 180 && headingAimingDiff > 40)
+  {
+    TURNDEBUG(AR(printf("Aiming Roughly\n")));
+    turnDir = 1;
+  }
+  else if(closest > 70 && aimDir > 0 && headingAimingDiff > 180 && headingAimingDiff < 320)
+  {
+    TURNDEBUG(AR(printf("Aiming Roughly\n")));
+    turnDir = -1;
+  }
+  else if(closest > 70 && aimDir > 0)
+  {
+    TURNDEBUG(AR(printf("Aiming Accurately\n")))
+    turnToDeg(aimDir);
+    turnDir = 0;
   }
   else if(selfSpeed() > 1 && closest < 100 && closest_angle > 2 && closest_angle <= 180)
   {
@@ -130,25 +159,9 @@ int AI_loop() {
   }
   //if the ship is already facing the furthest area, then turn away from nearby geometries
   
-  // aim at enemy
-  else if(aimDir > 0 && aimDir < heading)
-  {
-    TURNDEBUG(AR(printf("Aiming enemy\n")));
-    turnDir = 1;
-  }
-  else if(aimDir > 0 && aimDir > 180 && aimDir - 180 > heading)
-  {
-    TURNDEBUG(AR(printf("Aiming enemy\n")));
-    turnDir = 1;
-  }
-  else if(aimDir > 0 && aimDir > heading)
-  {
-    TURNDEBUG(AR(printf("Aiming enemy\n")));
-    turnDir = -1;
-  }
   //printf("ship angle: %f turning to %d", heading, aimDir);
   
-  if(backWall > 50)
+  if(headingAimingDiff < 90 || headingAimingDiff > 270)
   {
     fireShot(1);
   }
