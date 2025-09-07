@@ -72,7 +72,7 @@ int AI_loop() {
   int shotDanger = shotAlert(0);
   //printf("heading %f, tracking %f, diff: %d, trackWall: %f\n", heading, tracking, headingTrackingDiff, trackWall);
   //Thrust rules
-  if(shotDanger > 0 && shotDanger < 200 && frontWall > 200)
+  if(shotDanger > 0 && shotDanger < 200 && frontWall > 200 && trackWall > 80)
   {
     THRUSTDEBUG(AR(printf("avoiding shot: %d\n", shotDanger)));
     shouldThrust = 1;
