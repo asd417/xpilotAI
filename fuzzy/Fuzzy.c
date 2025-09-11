@@ -22,16 +22,17 @@
   #define THRUSTDEBUG(x)
 #endif
 
+
+//these membership functions are shared between linguistic variables ClosestAngle and FurthestAngle
 //anticlockwise rotation angle
-float mem_ClosestAngle_Front(int x)
+float mem_Angle_Front(int x)
 {
   if(x < 10) return 1;
   else if(x < 60) return -0.02f * x + 1.2f;
   else if(x > 300 && x < 350) return 0.02f * x - 6.0f;
   else return 1.0f;
 }
-
-float mem_ClosestAngle_Back(int x)
+float mem_Angle_Back(int x)
 {
   if(x < 125) return 0;
   else if(x < 175) return 0.02f * x - 2.5f;
@@ -39,8 +40,7 @@ float mem_ClosestAngle_Back(int x)
   else if(x < 234) return -0.02f * x + 4.7f;
   else return 0.0f;
 }
-
-float mem_ClosestAngle_Left(int x)
+float mem_Angle_Left(int x)
 {
   if(x<5) return 0.0f;
   else if(x < 55) return 0.02f * x - 0.1f;
@@ -48,8 +48,7 @@ float mem_ClosestAngle_Left(int x)
   else if(x < 150) return -0.02f * x + 3.0f;
   else return 0.0f;
 }
-
-float mem_ClosestAngle_Right(int x)
+float mem_Angle_Right(int x)
 {
   if(x < 210) return 0.0f;
   else if(x < 260) return 0.02f * x - 4.2f;
