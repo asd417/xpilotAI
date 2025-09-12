@@ -99,12 +99,12 @@ int AI_loop() {
   }
   else if(wall5 < 70 && frontWall > 250)
   {
-    THRUSTDEBUG(AR(printf("thrusters type4\n")));
-    shouldThrust = 1;
+    THRUSTDEBUG(AR(printf("thrusters type 4\n")));
+    shouldThrust = 1
   }
   else if(wall7 < 70 && frontWall > 250)
   {
-    THRUSTDEBUG(AR(printf("thrusters type5\n")));
+    THRUSTDEBUG(AR(printf("thrusters type 5\n")));
     shouldThrust = 1;
   }
 

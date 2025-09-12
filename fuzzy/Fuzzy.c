@@ -8,6 +8,7 @@
 
 #define DEBUGTURN
 //#define DEBUGTHRUST
+#define RAD(x) x/180*atan(1)*4
 //Alive run, only run when alive
 #define AR(x) if(selfAlive()){x;}
 #ifdef DEBUGTURN
@@ -23,52 +24,52 @@
 #endif
 
 
+float tanAngle(int x) //converts angle to tan(x/2) so that front is 0, left is positive, right is negative
+{
+  if(x==180) return 50.0f;
+  else return max(min(tan(RAD(x/2)), 50.0f),-50.0f);
+}
 //these membership functions are shared between linguistic variables ClosestAngle and FurthestAngle
 //anticlockwise rotation angle
 float mem_Angle_Front(int x)
 {
-  if(x < 10) return 1;
-  else if(x < 60) return -0.02f * x + 1.2f;
-  else if(x > 300 && x < 350) return 0.02f * x - 6.0f;
-  else return 1.0f;
-}
-float mem_Angle_Back(int x)
-{
-  if(x < 125) return 0;
-  else if(x < 175) return 0.02f * x - 2.5f;
-  else if(x < 185) return 1.0f;
-  else if(x < 234) return -0.02f * x + 4.7f;
+  float tanx = tanAngle(x);
+  if(tanx < -0.4f) return 0;
+  else if(tanx <= 0) return tanx+1.0f;
+  else if(tanx < 0.4f) return -tanx+1.0f;
   else return 0.0f;
 }
 float mem_Angle_Left(int x)
 {
-  if(x<5) return 0.0f;
-  else if(x < 55) return 0.02f * x - 0.1f;
-  else if(x < 100) return 1.0f;
-  else if(x < 150) return -0.02f * x + 3.0f;
-  else return 0.0f;
+  float tanx = tanAngle(x);
+  if(tanx < 0.5f) return 0;
+  else if(tanx < 1) return 2*tanx-1.0f;
+  else if(tanx < 2) return 1.0f;
+  else if(tanx < 3) return -tanx+3.0f;
+  else return 0;
 }
 float mem_Angle_Right(int x)
 {
-  if(x < 210) return 0.0f;
-  else if(x < 260) return 0.02f * x - 4.2f;
-  else if(x < 305) return 1.0f;
-  else if(x < 355) return -0.02f * x + 7.1f;
+  float tanx = tanAngle(x);
+  if(tanx < -3) return 0.0f;
+  else if(tanx < -2) return tanx+3.0f;
+  else if(tanx < -1) return 1.0f;
+  else if(tanx < -0.5f) return -2*tanx-1.0f;
   else return 0;
 }
 //distance to closest wall
 float mem_ClosestWall_Safe(int x)
 {
   if(x < 188) return 0.0f;
-  else if(x < 132) return 0.015f * x - 3.0f;
+  else if(x < 132) return 0.015f*x-3.0f;
   else return 1.0f;
 }
 
 float mem_ClosestWall_Close(int x)
 {
   if(x < 63) return 0.0f;
-  else if(x < 187) return 0.008f * x - 0.5f;
-  else if(x < 312.5f) return -0.008f * x + 2.5f;
+  else if(x < 187) return 0.008f*x-0.5f;
+  else if(x < 312.5f) return -0.008f*x+2.5f;
   else return 0.0f;
 }
 
