@@ -2,6 +2,7 @@ import os
 import cma
 import json
 import math
+import random
 import pickle
 import numpy as np
 
@@ -94,15 +95,24 @@ def mem_Angle_Right(x, a=-2, b=-1):
 # Distance to closest wall
 def mem_Wall_Safe(x, a=0.015, b=-5):
     return min(max(a*x+b, 0.0), 1.0)
-
 def mem_Wall_Close(x, a=0.008, b=-1.2, c=-0.009, d=3.6):
     if a * x + b < 1.0:
         return min(max(a*x+b, 0.0), 1.0)
     else:
         return min(max(c*x+d, 0.0), 1.0)
-
 def mem_Wall_Danger(x, a=-0.006, b=1.6):
     return min(max(a*x+b, 0.0), 1.0)
+
+def mem_Speed_Slow(x, a=-0.6, b=2):
+    return min(max(a*x+b, 0.0), 1.0)
+def mem_Speed_Medium(x, a=0.6, b=-1.3, c=-0.6, d=3.2):
+    if a*x+b < 1.0:
+        return min(max(a*x+b, 0.0), 1.0)
+    else:
+        return min(max(c*x+d, 0.0), 1.0)
+def mem_Speed_Fast(x, a=0.6, b=-2.5):
+    return min(max(a*x+b, 0.0), 1.0)
+
 
 # ---------- defuzzification ----------
 
@@ -147,19 +157,39 @@ def r5(closest, ws1, ws2):
     # If ClosestWall Safe Noturn
     return mem_Wall_Safe(closest, ws1, ws2)
 
-def r6(furthestAngle, ar1, ar2):
-    # If FurthestAngle Right turn Right
-    return mem_Angle_Right(furthestAngle, ar1, ar2)
+def r6(furthestAngle, speed, ar1, ar2, ss1, ss2):
+    # If FurthestAngle Right and speed is slow turn Right
+    return f_and(mem_Angle_Right(furthestAngle, ar1, ar2), mem_Speed_Slow(speed,ss1,ss2))
 
-def r7(furthestAngle, al1, al2):
-    # If FurthestAngle Left turn Left
-    return mem_Angle_Left(furthestAngle, al1, al2)
+def r7(furthestAngle, speed, al1, al2, ss1, ss2):
+    # If FurthestAngle Left and speed is slow turn Left
+    return f_and(mem_Angle_Left(furthestAngle, al1, al2), mem_Speed_Slow(speed,ss1,ss2))
 
-def r8(furthestAngle, af1, af2):
-    # If FurthestAngle Forward dont turn
-    return mem_Angle_Front(furthestAngle, af1, af2)
+def r8(furthestAngle, speed, af1, af2, ss1, ss2):
+    # If FurthestAngle Forward and speed is slow dont turn
+    return f_and(mem_Angle_Front(furthestAngle, af1, af2), mem_Speed_Slow(speed,ss1,ss2))
 
-def turnRules(closest, closestAngle, furthestAngle, chromosome):
+def r9(furthestAngle, speed, af1, af2, sm1, sm2, sm3, sm4):
+    # If FurthestAngle Forward and speed is medium dont turn
+    return f_and(mem_Angle_Front(furthestAngle, af1, af2), mem_Speed_Medium(speed,sm1,sm2,sm3,sm4))
+
+def r10(closestAngle, furthestAngle, af1, af2, ar1, ar2):
+    # If closestAngle front and furthestAngle right, turn right
+    return f_and(mem_Angle_Front(closestAngle, af1, af2), mem_Angle_Right(furthestAngle, ar1, ar2))
+
+def r11(closestAngle, furthestAngle, af1, af2, al1, al2):
+    # If closestAngle front and furthestAngle left, turn left
+    return f_and(mem_Angle_Front(closestAngle, af1, af2), mem_Angle_Left(furthestAngle, al1, al2))
+
+def r12(furthestAngle, speed, ar1, ar2, sf1, sf2):
+    # If furthestAngle right and speed fast, turn right
+    return f_and(mem_Speed_Fast(speed, sf1, sf2), mem_Angle_Right(furthestAngle, ar1, ar2))
+
+def r13(furthestAngle, speed, al1, al2, sf1, sf2):
+    # If furthestAngle right and speed fast, turn left
+    return f_and(mem_Speed_Fast(speed, sf1, sf2), mem_Angle_Left(furthestAngle, al1, al2))
+
+def turnRules(closest, closestAngle, furthestAngle, speed, chromosome):
     wd1 = chromosome[0]
     wd2 = chromosome[1]
     ar1 = chromosome[2]
@@ -172,11 +202,29 @@ def turnRules(closest, closestAngle, furthestAngle, chromosome):
     ws2 = chromosome[9]
     af1 = chromosome[10]
     af2 = chromosome[11]
+    ss1 = chromosome[12]
+    ss2 = chromosome[13]
+    sm1 = chromosome[14]
+    sm2 = chromosome[15]
+    sm3 = chromosome[16]
+    sm4 = chromosome[17]
+    sf1 = chromosome[18]
+    sf2 = chromosome[19]
     # rule activations
     # angle left is symmetrical to angle right
-    turnLeft  = r2(closest, closestAngle, wd1, wd2, ar1, ar2) + r4(closest, closestAngle, wc1, wc2, wc3, wc4, ar1, ar2) + r7(furthestAngle, -ar1, ar2)
-    noTurn    = r5(closest, ws1, ws2) + r8(furthestAngle, af1, af2)
-    turnRight = r1(closest, closestAngle, wd1, wd2, -ar1, ar2) + r3(closest, closestAngle, wc1, wc2, wc3, wc4, ar1, ar2) + r6(furthestAngle, ar1, ar2)
+    turnLeft  = r2(closest, closestAngle, wd1, wd2, ar1, ar2) \
+              + r4(closest, closestAngle, wc1, wc2, wc3, wc4, ar1, ar2) \
+              + r7(furthestAngle, speed, -ar1, ar2, ss1, ss2) \
+              + r11(closestAngle, furthestAngle, af1, af2, -ar1, ar2) \
+              + r13(furthestAngle, speed, ar1, ar2, sf1, sf2)
+    noTurn    = r5(closest, ws1, ws2) \
+              + r8(furthestAngle, speed, af1, af2, ss1, ss2) \
+              + r9(furthestAngle, speed, af1, af2, sm1, sm2, sm3, sm4)
+    turnRight = r1(closest, closestAngle, wd1, wd2, -ar1, ar2) \
+              + r3(closest, closestAngle, wc1, wc2, wc3, wc4, ar1, ar2) \
+              + r6(furthestAngle, speed, ar1, ar2, ss1, ss2) \
+              + r10(closestAngle, furthestAngle, af1, af2, ar1, ar2) \
+              + r12(furthestAngle, speed, ar1, ar2, sf1, sf2)
     # defuzzify to crisp turn
     return centroidTurn(turnLeft, noTurn, turnRight)
 
@@ -207,10 +255,13 @@ def save_ckpt(es, path=CKPT):
 
 def AI_loop():
     if not hasattr(ai, "cmaes"):
-        x0 = np.array([-0.006, 1.6, -2, -1, 0.008, -1.2, -0.009, 3.6, 0.015, -5, 5, 1], dtype=float)
-        CMA_stds = [0.0012, 0.32, 0.4, 0.2, 0.0016, 0.24, 0.0018, 0.72, 0.003, 1.0, 1.0, 0.2]
-        lower = [-0.02, -6, -6, -6, -0.02, -6, -0.02, -6, -0.02, -6, -6, -6]
-        upper = [ 0.02,  6,  6,  6,  0.02,  6,  0.02,  6,  0.02,  6,  6,  6]
+        # original: [-0.006,  1.6, -2, -1, 0.008, -1.2, -0.009, 3.6, 0.015, -5,  5,  1]
+        
+        lower =       [    -0.02,        0,       -6,       -6,       0,       -6,    -0.02,       0,       0,       -6,       0,       0,      -6,      0,      0,      -6,      -6,      0,   0    -6]
+        x0 = np.array([ -0.01184,  2.46319, -3.26869, -0.13646, 0.00312, -1.20687, -0.01669, 3.34848, 0.01903, -4.45064, 5.65590, 1.01388,-0.60291,2.78147,1.57518,-2.84979,-0.23811,3.17141, 0.6, -2.5], dtype=float)
+        upper =       [        0,        6,        0,        0,    0.02,        0,        0,       6,    0.02,        0,       6,       6,       0,      6,      6,       0,       0,      6,   6,    0]
+        CMA_stds =    [    0.004,      1.2,      1.2,      1.2,   0.004,      1.2,    0.004,     1.2,   0.004,      1.2,     1.2,     1.2,     1.2,    1.2,    1.2,     1.2,     1.2,    1.2, 1.2,  1.2]
+        
         opts = {"CMA_stds": CMA_stds, "bounds": [lower, upper]}
         es = load_or_create_es(x0,1.0, opts)
         setattr(ai, "cmaes", es)
@@ -314,10 +365,12 @@ def AI_loop():
     elif (wall7 < 70) and (frontWall > 250):
         # print("thrusters type 5")
         shouldThrust = 1
-    elif ai.selfSpeed() < 5:
+    elif ai.selfSpeed() < 4:
+        shouldThrust = 1
+    elif random.random() < 0.1:
         shouldThrust = 1
 
-    turn = turnRules(closest, closest_angle, furthest_angle, ai.cmaes_candidates[ai.cmaes_current])
+    turn = turnRules(closest, closest_angle, furthest_angle, ai.selfSpeed(), ai.cmaes_candidates[ai.cmaes_current])
     # print(f"centroid: {turn}")
     if turn < 0.75:
         turnDir = -1
@@ -325,6 +378,17 @@ def AI_loop():
         turnDir = 0
     else:
         turnDir = 1
+
+    # hardcoded aiming and reverse turning
+    if closest > 70 and aimDir > 0 and headingAimingDiff < 180 and headingAimingDiff > 40:
+        turnDir = 1
+    elif closest > 70 and aimDir > 0 and headingAimingDiff > 180 and headingAimingDiff < 320:
+        turnDir = -1
+    elif(ai.selfSpeed() > 13 and headingTrackingDiff < 175):
+        turnDir = -1
+    elif(ai.selfSpeed() > 13 and headingTrackingDiff > 185):
+        turnDir = 1
+    
 
     ai.thrust(1 if shouldThrust else 0)
 
