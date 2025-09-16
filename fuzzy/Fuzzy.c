@@ -358,7 +358,7 @@ int AI_loop() {
   float turn = turnRules(closest, closest_angle, furthest_angle, selfSpeed());
   
   AR(printf("centroid: %f\n", turn));
-  if((headingAimingDiff < 90 || headingAimingDiff > 270)&& backWall > 30)
+  if((headingAimingDiff < 20 || headingAimingDiff > 340) && backWall > 20 && aimDir > 0)
   {
     fireShot(1);
   }
@@ -397,12 +397,12 @@ int AI_loop() {
   // else if(turn < 1.25) turnDir = 0;
   // else turnDir = 1;
 
-  if(closest > 90 && aimDir > 0 && headingAimingDiff < 180 && headingAimingDiff > 40)
+  if(closest > 90 && aimDir > 0 && headingAimingDiff < 180 && headingAimingDiff > 4)
   {
     TURNDEBUG(AR(printf("Aiming Roughly\n")));
     turnDir = 1;
   }
-  else if(closest > 90 && aimDir > 0 && headingAimingDiff > 180 && headingAimingDiff < 320)
+  else if(closest > 90 && aimDir > 0 && headingAimingDiff > 180 && headingAimingDiff < 356)
   {
     TURNDEBUG(AR(printf("Aiming Roughly\n")));
     turnDir = -1;
