@@ -60,6 +60,13 @@ void addV(double *v1, double *v2, int vSize, double *out) {
     out[i] = v1[i] + v2[i];
   }
 }
+// Vector sub Vector
+// Assume out memory allocated
+void subV(double *v1, double *v2, int vSize, double *out) {
+  for (int i = 0; i < vSize; i++) {
+    out[i] = v1[i] - v2[i];
+  }
+}
 
 int getOutputCount(MLP *network) {return network->layers[network->layerCount - 1].wH;}
 double *getOutput(MLP *network) {return network->layers[network->layerCount - 1].out;}
@@ -67,7 +74,7 @@ double *getOutput(MLP *network) {return network->layers[network->layerCount - 1]
 void forwardSingle(Layer *layer, const double *in) {
   double *temp = malloc(layer->wH * sizeof(double));
   dot(layer->weights, in, layer->wW, layer->wH, temp);
-  addV(temp, layer->biases, layer->wH, layer->out);
+  subV(temp, layer->biases, layer->wH, layer->out);
   for (int i = 0; i < layer->wH; i++) {
     layer->out[i] = sigmoid(layer->out[i]);
   }
@@ -141,7 +148,7 @@ void backward(MLP *network, double *networkInput, double *targetOutput, double l
       for (int k = 0; k < nextLayer->wW; ++k) {
         dwNext[j * nextLayer->wW + k] = lr * inNext[k] * egNew[j];
       }
-      dbNext[j] = lr * egNew[j]; // book says multiply by -1 but doesnt work here..?
+      dbNext[j] = lr * -1.0f * egNew[j];
     }
     // swap buffers
     free(egLast);
@@ -261,7 +268,7 @@ int main() {
     printf("%d ", nodes[i]);
   }
   printf("\n");
-  double lr = 1.0f;
+  double lr = 0.1f;
   int maxEpoch = 10000;
   printf("  Learning Rate: %f\n", lr);
   printf("  Epoch: %d\n", maxEpoch);
