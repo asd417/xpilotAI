@@ -2,14 +2,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "mlp.h"
-#include "mlp_print.h"
+typedef struct Layer {
+  double *weights;
+  int wW; // weight Width
+  int wH; // weight Height
+  double *biases; // size wH
+  double *out;    // size wH
+} Layer;
 
-typedef struct {
+typedef struct MLP {
+  struct Layer *layers; // array of length layerCount
+  int layerCount;
   int inputCount;
-  float *expectedIn;
-  float expectedOut;
-} TrainData;
+  int outputCount;
+} MLP;
 
 // Trying to train the given data set with just 1 perceptron
 //  will not work because it is a non-linear function
@@ -17,15 +23,15 @@ typedef struct {
 // This program initializes a fully connected multilayered perceptron with
 // matrices of weights and biases
 
-float sigmoid(float x) { return 1.0f / (1.0f + exp(-x)); }
+double sigmoid(double x) { return 1.0f / (1.0f + exp(-x)); }
 
-// returns a random float between min and max
-float frand(float min, float max) {
-  return fmax(fmin((max - min) * (float)rand() / ((float)RAND_MAX) + min, max),
+// returns a random double between min and max
+double frand(double min, double max) {
+  return fmax(fmin((max - min) * (double)rand() / ((double)RAND_MAX) + min, max),
               min);
 }
-int frandArray(int size, float min, float max, float **out) {
-  *out = malloc(size * sizeof(float));
+int frandArray(int size, double min, double max, double **out) {
+  *out = malloc(size * sizeof(double));
   if (*out == NULL) {
     return 1;
   }
@@ -37,132 +43,133 @@ int frandArray(int size, float min, float max, float **out) {
 // Matrix dot Vector
 // Assume vW = 1, vH = mW
 // Assume out memory allocated
-void dot(const float *m, const float *v, int mW, int mH, float* out) {
+// row major
+void dot(const double *m, const double *v, int mW, int mH, double *out) {
   for (int i = 0; i < mH; i++) {
-    const float *row = &m[i * mW];
-    float acc = 0.0f;
+    double acc = 0.0f;
     for (int j = 0; j < mW; j++) {
-      acc += row[j] * v[j];
+      acc += m[i * mW + j] * v[j];
     }
     out[i] = acc;
   }
 }
 // Vector add Vector
 // Assume out memory allocated
-void addV(float *v1, float *v2, int vSize, float* out) {
+void addV(double *v1, double *v2, int vSize, double *out) {
   for (int i = 0; i < vSize; i++) {
     out[i] = v1[i] + v2[i];
   }
 }
 
-int getOutputCount(MLP *network) {
-  return network->layers[network->layerCount - 1].wH;
-}
-float *getOutput(MLP *network) {
-  return network->layers[network->layerCount - 1].out;
-}
+int getOutputCount(MLP *network) {return network->layers[network->layerCount - 1].wH;}
+double *getOutput(MLP *network) {return network->layers[network->layerCount - 1].out;}
 
-void forwardSingle(Layer *layer, const float *in) {
-  dot(layer->weights, in, layer->wW, layer->wH, layer->out);
-  addV(layer->out, layer->biases, layer->wH, layer->out);
+void forwardSingle(Layer *layer, const double *in) {
+  double *temp = malloc(layer->wH * sizeof(double));
+  dot(layer->weights, in, layer->wW, layer->wH, temp);
+  addV(temp, layer->biases, layer->wH, layer->out);
   for (int i = 0; i < layer->wH; i++) {
     layer->out[i] = sigmoid(layer->out[i]);
   }
 }
-void forward(MLP *network, const float *in) {
-  const float *current = in;
+
+void forward(MLP *network, const double *in) {
+  const double *current = in;
   for (int i = 0; i < network->layerCount; i++) {
     forwardSingle(&network->layers[i], current);
     current = network->layers[i].out;
   }
 }
 
-int maxLayerOut(MLP *network) {
-  int maxSize = 0;
-  for (int i = 0; i < network->layerCount; i++) {
-    maxSize = max(network->layers[i].wH, maxSize);
-  }
-  return maxSize;
-}
+// partial differentiation of sigmoid
+double partial(double x) { return x * (1 - x); }
 
-int maxLayerWeights(MLP *network) {
-  int maxSize = 0;
-  for (int i = 0; i < network->layerCount; i++) {
-    maxSize = max(network->layers[i].wH * network->layers[i].wW, maxSize);
-  }
-  return maxSize;
-}
+// pain
+void backward(MLP *network, double *networkInput, double *targetOutput, double lr) {
+  const int lc = network->layerCount;
+  Layer *layer     = &network->layers[lc - 1]; //output layer
+  Layer *nextLayer = (lc > 1) ? &network->layers[lc - 2] : NULL;
+  const double *in  = (lc > 1) ? nextLayer->out : networkInput; // check if the network is just a perceptron
 
-void backward(MLP *network, float* in, float *targetOutput, float lr) {
-  float *errorGradientFront = malloc(maxLayerOut(network) * sizeof(float));
-  float *errorGradientBack = malloc(maxLayerOut(network) * sizeof(float));
-  float *deltaW = malloc(maxLayerWeights(network) * sizeof(float));
-  Layer* targetLayer = &network->layers[network->layerCount-1]; // start with last layer
-  const float *currentOut = getOutput(network); // start with network output
-  const float *currentIn; // input to the last year
-  if (network->layerCount == 1) {
-    currentIn = in; // no hidden layer
+  // output layer error gradient
+  double *egLast = malloc(layer->wH * sizeof(double));
+  for (int i = 0; i < layer->wH; ++i) {
+    egLast[i] = partial(layer->out[i]) * (targetOutput[i] - layer->out[i]);
   }
-  else {
-    currentIn = network->layers[network->layerCount - 2].out; // hidden state of the previous layer
-  }
-  // error gradient of the output layer (write it to front buffer)
-  for (int i = 0; i < targetLayer->wH; i++) {
-    errorGradientFront[i] = currentOut[i] * (1 - currentOut[i]) * (targetOutput[i] - currentOut[i]);
-  }
-  // delta weight of the target layer (read from front buffer) dont update weight here we need it for error gradient of the next layer
-  for (int k = 0; k < targetLayer->wH; k++) {
-    for (int j = 0; j < targetLayer->wW; j++) {
-      deltaW[k*targetLayer->wW+j] = lr * currentIn[j] * errorGradientFront[k];
+  // output layer delta weight
+  double *dw = malloc(layer->wH * layer->wW * sizeof(double));
+  double *db = malloc(layer->wH * sizeof(double));
+  for (int j = 0; j < layer->wH; ++j) {
+    for (int k = 0; k < layer->wW; ++k) {
+      dw[j * layer->wW + k] = lr * in[k] * egLast[j];
     }
+    db[j] = lr * egLast[j];
   }
-  // error gradient for the hidden layer (read from front buffer and write it to back buffer)
-  for (int j = 0; j < targetLayer->wW; j++) {
-    float error = 0.0f;
-    for (int k = 0; k < targetLayer->wH; k++) {
-      error += errorGradientFront[k] * targetLayer->weights[k*targetLayer->wW+j];
+  // start looping
+  // start from output layer
+  for (int l = lc - 1; l >= 0; --l) {
+    layer = &network->layers[l];
+    nextLayer = (l > 0) ? &network->layers[l - 1] : NULL;
+
+    // update weight of the last layer
+    // on first iter, this updates output layer weights and biases
+    for (int j = 0; j < layer->wH; ++j) {
+      for (int k = 0; k < layer->wW; ++k) {
+        layer->weights[j * layer->wW + k] += dw[j * layer->wW + k];
+      }
+      layer->biases[j] += db[j];
     }
-    errorGradientBack[j] = currentIn[j] * (1-currentIn[j]) * error;
-  }
-  // apply delta weight
-  for (int k = 0; k < targetLayer->wH; k++) {
-    for (int j = 0; j < targetLayer->wW; j++) {
-      targetLayer->weights[k*targetLayer->wW+j] += deltaW[k*targetLayer->wW+j];
+    // reached input layer
+    if (l == 0) break;
+    
+    // error gradient for next layer
+    double *egNew = malloc(nextLayer->wH * sizeof(double));
+    for (int i = 0; i < nextLayer->wH; ++i) {
+      double acc = 0.0f;
+      for (int j = 0; j < layer->wH; ++j) {
+        acc += egLast[j] * layer->weights[j * layer->wW + i]; // sum error
+      }
+      egNew[i] = acc * partial(nextLayer->out[i]);
     }
-  }
-  // move target layer
-  targetLayer--;
-  currentIn = in;
-  // swap errorgradient buffers
-  float *temp = errorGradientBack;
-  errorGradientBack = errorGradientFront;
-  errorGradientFront = temp;
-  // delta weight of the target layer (read from front buffer)
-  for (int k = 0; k < targetLayer->wH; k++) {
-    for (int j = 0; j < targetLayer->wW; j++) {
-      deltaW[k*targetLayer->wW+j] = lr * currentIn[j] * errorGradientFront[k];
+
+    // delta weight biases of next layer
+    const double *inNext = (l > 1) ? network->layers[l - 2].out : networkInput;
+    double *dwNext = malloc(nextLayer->wH * nextLayer->wW * sizeof(double));
+    double *dbNext = malloc(nextLayer->wH * sizeof(double));
+
+    for (int j = 0; j < nextLayer->wH; ++j) {
+      for (int k = 0; k < nextLayer->wW; ++k) {
+        dwNext[j * nextLayer->wW + k] = lr * inNext[k] * egNew[j];
+      }
+      dbNext[j] = lr * egNew[j]; // book says multiply by -1 but doesnt work here..?
     }
+    // swap buffers
+    free(egLast);
+    free(dw);
+    free(db);
+    egLast = egNew;
+    dw = dwNext;
+    db = dbNext;
   }
-  // apply delta weight
-  for (int k = 0; k < targetLayer->wH; k++) {
-    for (int j = 0; j < targetLayer->wW; j++) {
-      targetLayer->weights[k*targetLayer->wW+j] += deltaW[k*targetLayer->wW+j];
-    }
-  }
+  // clean
+  free(egLast);
+  free(dw);
+  free(db);
 }
 
 // for example:
 // 2 inputs, 1 hidden layer of size 2, 1 output -> [2,2,1]
 int createMLP(int *nodes, int nodesSize, MLP **out) {
-  if (!out || !nodes || nodesSize < 2) return 1;
+  if (!out || !nodes || nodesSize < 2)
+    return 1;
   *out = malloc(sizeof(MLP));
   (*out)->layerCount = nodesSize - 1;
   (*out)->layers = calloc((nodesSize - 1), sizeof(Layer));
-  int error=0, pos=0;
+  int error = 0, pos = 0;
   for (int i = 0; i < nodesSize - 1; i++) {
     if (i == 0)
       (*out)->inputCount = nodes[i];
-    //printf("%d", i);
+    // printf("%d", i);
     if (i == nodesSize - 2)
       (*out)->outputCount = nodes[i + 1];
     int layerIn = nodes[i];
@@ -170,10 +177,11 @@ int createMLP(int *nodes, int nodesSize, MLP **out) {
     error += frandArray(layerIn * layerOut, -2.4f / layerIn, 2.4f / layerIn,
                         &((*out)->layers[i].weights));
     error += frandArray(layerOut, -1.0f, 1.0f, &((*out)->layers[i].biases));
-    (*out)->layers[i].out = calloc(layerOut, sizeof(float));
+    (*out)->layers[i].out = calloc(layerOut, sizeof(double));
     (*out)->layers[i].wW = layerIn;
     (*out)->layers[i].wH = layerOut;
-    if (error) break; // catch malloc fail
+    if (error)
+      break; // catch malloc fail
     pos = i;
   }
   if (error) {
@@ -190,21 +198,74 @@ int createMLP(int *nodes, int nodesSize, MLP **out) {
   return 0;
 }
 
+typedef struct {
+  int inputCount;
+  int outputCount;
+  double *expectedIn;
+  double *expectedOut;
+} TrainingData;
+
+// dataset is an array of TrainingData
+void train(MLP *network, int epoch, double lr, TrainingData *dataset, int datasetSize, int reportEvery) {
+  for (int e = 0; e < epoch; e++) {
+    double error = 0.0f;
+    for (int i = 0; i < datasetSize; i++) {
+      double *in = dataset[i].expectedIn;
+      double *expectedO = dataset[i].expectedOut;
+      forward(network, in);
+      double *realO = getOutput(network);
+      for (int i = 0; i < network->outputCount; i++) {
+        error += fabs(expectedO[i] - realO[i]);
+        //printf("\tExpected %f, Real %f\n", expectedO[i], realO[i]);
+      }
+      backward(network, in, expectedO, lr);
+    }
+    if (e % reportEvery == 0) {
+      printf("Epoch %d\n", e);
+      printf("\tEpoch Mean Error %f\n", error / datasetSize);
+    }
+  }
+}
+
+int createDataset(TrainingData **out) {
+  int inputs = 5;
+  int outputs = 1;
+  int dataSize = pow(2, inputs);
+  *out = malloc(dataSize * sizeof(TrainingData));
+  for (int i = 0; i < dataSize; i++) {
+    (*out)[i].inputCount = inputs;
+    (*out)[i].outputCount = outputs;
+    (*out)[i].expectedIn = malloc(inputs * sizeof(double));
+    (*out)[i].expectedOut = malloc(outputs * sizeof(double));
+    double sum = 0;
+    for (int j = inputs; j > 0; j--) {
+      double v = (double)((i >> (j - 1)) & 1); // shift right and mask
+      (*out)[i].expectedIn[inputs - j] = v;
+      sum += v;
+    }
+    (*out)[i].expectedOut[0] = sum > 3.9f || sum < 1.1f ? 1.0f : 0.0f;
+  }
+  return dataSize;
+}
+
 #define NODESSIZE 3
-#define INPUTSIZE 2
+#define INPUTSIZE 5
 #define OUTPUTSIZE 1
 int main() {
-  int nodes[NODESSIZE] = {INPUTSIZE, 2, OUTPUTSIZE};
-  float inputs[INPUTSIZE] = {2,3};
-  MLP* network;
-  createMLP(nodes, NODESSIZE, &network);
-  printf("MLP input size: %d output size: %d\n", network->inputCount,
-         network->outputCount);
-  forward(network, inputs);
-  float *outs = getOutput(network);
-  for (int i = 0; i < network->outputCount; i++) {
-    printf("%f ", outs[i]);
+  int nodes[NODESSIZE] = {INPUTSIZE, 3, OUTPUTSIZE};
+  TrainingData *dataset;
+  int datasetSize = createDataset(&dataset);
+  MLP *network;
+  printf("MLP\n  Structure: ");
+  for (int i = 0; i < NODESSIZE; i++) {
+    printf("%d ", nodes[i]);
   }
-  printMLP(network);
+  printf("\n");
+  double lr = 1.0f;
+  int maxEpoch = 10000;
+  printf("  Learning Rate: %f\n", lr);
+  printf("  Epoch: %d\n", maxEpoch);
+  createMLP(nodes, NODESSIZE, &network);
+  train(network, maxEpoch, lr, dataset, datasetSize, 1000);
   return 0;
 }
