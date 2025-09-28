@@ -97,6 +97,7 @@ void forwardSingle(Layer *layer, const double *in)
   {
     layer->out[i] = sigmoid(layer->out[i]);
   }
+  free(temp);
 }
 
 void forward(MLP *network, const double *in)
@@ -635,7 +636,7 @@ int AI_loop()
   inputs[8] = furthest_angle / 360.0f;
   for (int i = 9; i < 21; i++)
   {
-    inputs[i] = wallFeeler(500, heading + i * 30) / 500.0f; // normalize
+    inputs[i] = wallFeeler(500, heading + (i-9) * 30) / 500.0f; // normalize
   }
 
   double navigationGoal = ruleBasedBotTurnNav(headingTrackingDiff, headingAimingDiff, aimDir, heading, closest, closest_angle, furthest_angle);
@@ -717,54 +718,72 @@ int main(int argc, char *argv[])
   return 0;
 #endif
 #ifdef TRAINER
-  printf("Training NN\n");
-  replay = fopen(replayPath, "r");
-  if (!replay)
-  {
-    fprintf(stderr, "Error opening file %s: ", replayPath);
-    return 1;
-  }
-  // train
+  const char *replayPaths[] = {
+      "replay.txt",
+      "replay2.txt",
+  };
+  const int replayCount = 2;
+  double learningRate = 0.00001f;
+  const int epoch = 1000;
+  printf("Training NN\n Epoch: %d Lr: %f\n", epoch, learningRate);
   double values[INPUTSIZE + OUTPUTSIZE]; // oneline
-  double learningRate = 0.000001f;
-  int epoch = 2000;
-  for(int e = 0;e < epoch;e++)
+  for(int r=0;r<replayCount;r++)
   {
+    int dataCount = 0;
+    replay = fopen(replayPaths[r], "r");
+    if (!replay)
+    {
+      fprintf(stderr, "Error opening file %s: ", replayPath);
+      return 1;
+    }
+    
+    for(int e = 0;e < epoch;e++)
+    {
+      int count = 0;
+      while (fscanf(replay, "%lf", &values[count]) == 1)
+      {
+        count++;
+        if (count == INPUTSIZE + OUTPUTSIZE)
+        {
+          forward(network, values);
+          backward(network, values, &(values[INPUTSIZE]), learningRate);
+          count = 0;
+          dataCount++;
+        }
+      }
+      rewind(replay);
+    }
+    fclose(replay);
+    printf("Trained with %d lines from %s for %d epochs\n", dataCount / epoch, replayPaths[r], epoch);
+  }
+
+  double error = 0.0f;
+  int dataCount = 0;
+  for(int r=0;r<replayCount;r++)
+  {
+    replay = fopen(replayPaths[r], "r");
+    rewind(replay);
+    // get accuracy
     int count = 0;
     while (fscanf(replay, "%lf", &values[count]) == 1)
     {
       count++;
       if (count == INPUTSIZE + OUTPUTSIZE)
       {
-        backward(network, values, &(values[INPUTSIZE]), learningRate);
+        forward(network, values);
+        double *out = getOutput(network);
+        for (int i = 0; i < OUTPUTSIZE; i++)
+        {
+          float diff = values[INPUTSIZE + i] - out[i];
+          error += diff * diff;
+        }
         count = 0;
+        dataCount++;
       }
     }
-    rewind(replay);
-  }
-  // get accuracy
-  double error = 0.0f;
-  int dataCount = 0;
-  int count = 0;
-  while (fscanf(replay, "%lf", &values[count]) == 1)
-  {
-    count++;
-    if (count == INPUTSIZE + OUTPUTSIZE)
-    {
-      forward(network, values);
-      double *out = getOutput(network);
-      for (int i = 0; i < OUTPUTSIZE; i++)
-      {
-        float diff = values[INPUTSIZE + i] - out[i];
-        error += diff * diff;
-      }
-      count = 0;
-      dataCount++;
-    }
+    fclose(replay);
   }
   mlpSave(network, modelPath);
-  printf("Trained with %d lines for %d epochs\n", dataCount, epoch);
   printf(" Avg Error %f\n Model saved to %s\n", sqrt(error / dataCount), modelPath);
-  fclose(replay);
 #endif
 }

@@ -78,6 +78,7 @@ void forwardSingle(Layer *layer, const double *in) {
   for (int i = 0; i < layer->wH; i++) {
     layer->out[i] = sigmoid(layer->out[i]);
   }
+  free(temp);
 }
 
 void forward(MLP *network, const double *in) {

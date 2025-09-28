@@ -12,3 +12,5 @@ build/*
 */CMakeCache.txt
 */Makefile
 */replay.txt
+*/replay1.txt
+*/replay2.txt
