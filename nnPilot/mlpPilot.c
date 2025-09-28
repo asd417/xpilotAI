@@ -677,7 +677,7 @@ int AI_loop()
   turnDir = getOutput(network)[0]; // Use output from NN
   printf("%f\n", turnDir);
 #endif
-
+free(inputs);
   if (turnDir > 0.6f)
   {
     turnRight(1);
@@ -724,7 +724,7 @@ int main(int argc, char *argv[])
   };
   const int replayCount = 2;
   double learningRate = 0.00001f;
-  const int epoch = 1000;
+  const int epoch = 200;
   printf("Training NN\n Epoch: %d Lr: %f\n", epoch, learningRate);
   double values[INPUTSIZE + OUTPUTSIZE]; // oneline
   for(int r=0;r<replayCount;r++)
