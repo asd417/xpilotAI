@@ -1,0 +1,6 @@
+model will be uploaded later
+rename the model file to be model.save and put it with the ./MLP executable to run
+
+build_player to build player that plays with trained model
+build_recorder to build rulebased expert that plays and records replay
+build_trainer to build a trainer that trains the model based on the replays

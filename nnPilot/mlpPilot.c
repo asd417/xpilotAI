@@ -1,11 +1,14 @@
 #include <time.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
-#include "cAI.h"
 
+#if defined(PLAYER) || defined(RECORDER)
+#include "cAI.h"
+#endif
 typedef struct Layer
 {
   double *weights;
@@ -414,41 +417,6 @@ int mlpLoad(MLP *out, const char *path)
   return 0;
 }
 
-typedef struct
-{
-  int inputCount;
-  int outputCount;
-  double *expectedIn;
-  double *expectedOut;
-} TrainingData;
-
-// dataset is an array of TrainingData
-void train(MLP *network, int epoch, double lr, TrainingData *dataset, int datasetSize, int reportEvery)
-{
-  for (int e = 0; e < epoch; e++)
-  {
-    double error = 0.0f;
-    for (int i = 0; i < datasetSize; i++)
-    {
-      double *in = dataset[i].expectedIn;
-      double *expectedO = dataset[i].expectedOut;
-      forward(network, in);
-      double *realO = getOutput(network);
-      for (int i = 0; i < network->outputCount; i++)
-      {
-        error += fabs(expectedO[i] - realO[i]);
-        // printf("\tExpected %f, Real %f\n", expectedO[i], realO[i]);
-      }
-      backward(network, in, expectedO, lr);
-    }
-    if (e % reportEvery == 0)
-    {
-      printf("Epoch %d\n", e);
-      printf("\tEpoch Mean Error %f\n", error / datasetSize);
-    }
-  }
-}
-
 #ifdef DEBUGTHRUST
 #define THRUSTDEBUG(x) x;
 #else
@@ -459,7 +427,7 @@ void train(MLP *network, int epoch, double lr, TrainingData *dataset, int datase
 #else
 #define TURNDEBUG(x)
 #endif
-
+#if defined(PLAYER) || defined(RECORDER)
 float ruleBasedBotThrust(int shotDanger, int headingTrackingDiff, int furthest_angle, int trackWall, int heading)
 {
   double frontWall = wallFeeler(500, heading);
@@ -499,6 +467,10 @@ float ruleBasedBotThrust(int shotDanger, int headingTrackingDiff, int furthest_a
   else if (wall7 < 70 && frontWall > 250)
   {
     THRUSTDEBUG(AR(printf("thrusters type 5\n")));
+    return 1;
+  } else if (selfSpeed() < 1)
+  {
+    THRUSTDEBUG(AR(printf("thrusters type 6\n")));
     return 1;
   }
   return 0;
@@ -553,11 +525,11 @@ float ruleBasedBotTurnNav(int headingTrackingDiff, int headingAimingDiff, int ai
   else
     return 0.5;
 }
-
+#endif
 MLP *network = NULL;
 
 #define INPUTSIZE 21 //
-#define NODESSIZE 5  // 2 hidden layers
+#define NODESSIZE 3  // 2 + hidden layers
 #define OUTPUTSIZE 1
 #define AR(x)      \
   if (selfAlive()) \
@@ -566,7 +538,7 @@ MLP *network = NULL;
   }
 
 FILE *replay;
-
+#if defined(PLAYER) || defined(RECORDER)
 int AI_loop()
 {
   srand((unsigned int)time(NULL));
@@ -625,10 +597,10 @@ int AI_loop()
 
   int headingAimingDiff = ((int)(heading + 360 - aimDir) % 360);
   int headingTrackingDiff = ((int)(heading + 360 - tracking) % 360);
-  inputs[0] = selfSpeed() / 10.0f;
+  inputs[0] = fmin(selfSpeed() / 10.0f, 1.0f);
   inputs[1] = headingTrackingDiff / 360.0f;
   inputs[2] = headingAimingDiff / 360.0f;
-  inputs[3] = (double)shotAlert(0) / 100.0f;
+  inputs[3] = fmin((double)shotAlert(0) / 100.0f, 1.0f);
   inputs[4] = trackWall / 500.0f;
   inputs[5] = closest / 500.0f;
   inputs[6] = closest_angle / 360.0f;
@@ -667,15 +639,14 @@ int AI_loop()
     fprintf(replay, "%f", inputs[i]);
     fprintf(replay, " "); // space between numbers
   }
-  fprintf(replay, "%f", turnRB); // vs turnRB
+  fprintf(replay, "%f", turnRB); // when creating replay, only encode 1 value. sanitize.py will split this direction value into turnRight and turnLeft
   fprintf(replay, "\n"); // end with newline
   fflush(replay);
 #endif
 #ifdef PLAYER
   forward(network, inputs);
   //NN output (sigmoid activation)
-  turnDir = getOutput(network)[0]; // Use output from NN
-  printf("%f\n", turnDir);
+  turnDir = getOutput(network)[0];
 #endif
 free(inputs);
   if (turnDir > 0.6f)
@@ -699,16 +670,35 @@ free(inputs);
   else
     thrust(0);
 }
-
+#endif
 int main(int argc, char *argv[])
 {
-  int nodes[NODESSIZE] = {INPUTSIZE, 10, 10, 10, OUTPUTSIZE};
+  // best architecture so far was [21, 21, 1] at 71% accuracy for epoch 500, lr 0.05
+  // [21, 21, 1] lr 0.04 epoch 700 acc 0.823
+  // [21, 21, 1] lr 0.055 epoch 1000 acc 0.835
+  // [21, 21, 1] lr 0.7 epoch 300 acc 0.825
+  // [21, 21, 1] lr 0.03 epoch 1000 acc 0.83
+  // [21, 21, 1] lr 0.045 epoch 1000 acc 0.84
+
+  // [21, 21, 1] lr 0.7 epoch 200 decay 0.9995 acc 0.808
+  // [21, 21, 1] lr 0.7 epoch 300 decay 0.9995 acc 0.805
+  // [21, 21, 1] lr 0.7 epoch 500 decay 0.9995 acc 0.833
+  // [21, 21, 1] lr 0.7 epoch 1000 decay 0.9995 acc 0.844
+
+  // [21, 21, 1] lr 0.7 epoch 200 decay 0.9661 acc 0.782
+  // [21, 21, 1] lr 0.7 epoch 150 decay 0.955 acc 0.799
+  // [21, 21, 1] lr 0.8 epoch 500 decay 0.9995 acc 0.82
+  // [21, 21, 1] lr 0.7 epoch 300 decay 0.99 acc 0.74
+  // [21, 21, 1] lr 0.7 epoch 200 decay 0.99 acc 0.82
+
+  int nodes[NODESSIZE] = {INPUTSIZE, 21, OUTPUTSIZE};
 
   createMLP(nodes, NODESSIZE, &network);
-  const char *modelPath = "model.save";
+  char modelNameBuffer[200];
+  const char* modelPath = "model-lr%f-decay%f-epoch%d.save";
   const char *replayPath = "replay.txt";
 #ifdef PLAYER
-  mlpLoad(network, modelPath);
+  mlpLoad(network, "model.save");
   return start(argc, argv);
 #endif
 #ifdef RECORDER
@@ -718,27 +708,34 @@ int main(int argc, char *argv[])
   return 0;
 #endif
 #ifdef TRAINER
+  if (argc < 2) {
+        printf("Usage: %s lr epoch decay\n", argv[0]);
+        return 1;
+    }
+  srand(0);
   const char *replayPaths[] = {
-      "replay.txt",
-      "replay2.txt",
+      "replay_clean.txt",
+      "replay2_clean.txt",
   };
   const int replayCount = 2;
-  double learningRate = 0.00001f;
-  const int epoch = 200;
+  double learningRate = atof(argv[1]);
+  const int epoch = atoi(argv[2]);
+  double decay = atof(argv[3]);
   printf("Training NN\n Epoch: %d Lr: %f\n", epoch, learningRate);
   double values[INPUTSIZE + OUTPUTSIZE]; // oneline
   for(int r=0;r<replayCount;r++)
   {
-    int dataCount = 0;
     replay = fopen(replayPaths[r], "r");
     if (!replay)
     {
       fprintf(stderr, "Error opening file %s: ", replayPath);
       return 1;
     }
-    
+    rewind(replay);
+    int dataCount = 0;
     for(int e = 0;e < epoch;e++)
     {
+      dataCount = 0;
       int count = 0;
       while (fscanf(replay, "%lf", &values[count]) == 1)
       {
@@ -752,12 +749,14 @@ int main(int argc, char *argv[])
         }
       }
       rewind(replay);
+      learningRate *= decay;
     }
     fclose(replay);
-    printf("Trained with %d lines from %s for %d epochs\n", dataCount / epoch, replayPaths[r], epoch);
+    printf("Trained with %d lines from %s for %d epochs\n", dataCount, replayPaths[r], epoch);
   }
 
   double error = 0.0f;
+  float accuracy = 0.0f;
   int dataCount = 0;
   for(int r=0;r<replayCount;r++)
   {
@@ -777,13 +776,21 @@ int main(int argc, char *argv[])
           float diff = values[INPUTSIZE + i] - out[i];
           error += diff * diff;
         }
+        //Accuracy calculation for 1 output
+        accuracy += out[0] > 0.6f && values[INPUTSIZE] > 0.6f ? 1:0;
+        accuracy += out[0] < 0.4f && values[INPUTSIZE] < 0.4f ? 1:0;
+        accuracy += out[0] > 0.4f && out[0] < 0.6f && values[INPUTSIZE] > 0.4f && values[INPUTSIZE] < 0.6f? 1:0;
+        //Accuracy calculation for 2 outputs
+        //accuracy += out[0] > out[1] && values[INPUTSIZE] > values[INPUTSIZE + 1] ? 1:0;
+        //accuracy += out[0] < out[1] && values[INPUTSIZE] < values[INPUTSIZE + 1] ? 1:0;
         count = 0;
         dataCount++;
       }
     }
     fclose(replay);
   }
-  mlpSave(network, modelPath);
-  printf(" Avg Error %f\n Model saved to %s\n", sqrt(error / dataCount), modelPath);
+  sprintf(modelNameBuffer, modelPath, learningRate, decay, epoch);
+  mlpSave(network, modelNameBuffer);
+  printf(" Avg Error %f\n Avg Accuracy %f\n Model saved\n", sqrt(error / dataCount), accuracy / dataCount);
 #endif
 }

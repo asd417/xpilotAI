@@ -14,3 +14,7 @@ build/*
 */replay.txt
 */replay1.txt
 */replay2.txt
+*/replay_clean.txt
+*/replay1_clean.txt
+*/replay2_clean.txt
+cluster.py
