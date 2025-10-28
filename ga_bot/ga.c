@@ -4,7 +4,52 @@
 #include <string.h>
 #include <time.h>
 #include <ctype.h>
-#include <getopt.h>
+
+
+#if defined(_WIN32) || defined(_WIN64)
+    #include <windows.h>   // <-- needed for Sleep(ms)
+#else
+    #include <getopt.h>
+#endif
+#include <sqlite3.h>
+
+#if defined(_WIN32) || defined(_WIN64)
+// Windows-compatible getline implementation
+size_t getline(char **lineptr, size_t *n, FILE *stream) {
+    if (!lineptr || !n || !stream) return -1;
+    int c;
+    size_t pos = 0;
+    if (*lineptr == NULL || *n == 0) {
+        *n = 128;
+        *lineptr = malloc(*n);
+        if (*lineptr == NULL) return -1;
+    }
+    while ((c = fgetc(stream)) != EOF) {
+        if (pos + 1 >= *n) {
+            *n *= 2;
+            char *tmp = realloc(*lineptr, *n);
+            if (!tmp) return -1;
+            *lineptr = tmp;
+        }
+        (*lineptr)[pos++] = (char)c;
+        if (c == '\n') break;
+    }
+    if (pos == 0 && c == EOF) return -1;
+    (*lineptr)[pos] = '\0';
+    return (size_t)pos;
+}
+#endif
+
+
+// --- add near your SQLite helpers ---
+static void sleep_ms(int ms) {
+#ifdef _WIN32
+    Sleep(ms);
+#else
+    struct timespec ts; ts.tv_sec = ms / 1000; ts.tv_nsec = (ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+#endif
+}
 
 typedef unsigned char bit_t; /* 0 or 1 */
 
@@ -12,7 +57,8 @@ typedef struct {
     bit_t *genes;
     int fitness;
 } Chromosome;
-
+void sortPop(Chromosome** in, int population);
+Chromosome *createChromosome(int L);
 typedef struct {
     int generation;
     int population;
@@ -22,6 +68,257 @@ typedef struct {
     int saveEvery;
     double mutation;
 } Hyper;
+
+// ---------- SQLite helpers (NEW) ----------
+static sqlite3 *g_db = NULL;
+
+static void die_sqlite(const char *msg, int rc) {
+    fprintf(stderr, "SQLite error: %s (rc=%d)\n", msg, rc);
+    exit(1);
+}
+
+static void db_open(const char *path) {
+    int rc = sqlite3_open(path, &g_db);
+    if (rc != SQLITE_OK) die_sqlite("sqlite3_open failed", rc);
+    // pragma: durable enough, still fast
+    sqlite3_exec(g_db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
+    sqlite3_exec(g_db, "PRAGMA synchronous=NORMAL;", NULL, NULL, NULL);
+}
+
+static void db_close(void) {
+    if (g_db) sqlite3_close(g_db);
+    g_db = NULL;
+}
+
+static void db_init_schema(void) {
+    const char *sql =
+        "CREATE TABLE IF NOT EXISTS generations ("
+        "  gen INTEGER PRIMARY KEY,"
+        "  created_ts INTEGER NOT NULL"
+        ");"
+        "CREATE TABLE IF NOT EXISTS individuals ("
+        "  gen INTEGER NOT NULL,"
+        "  idx INTEGER NOT NULL,"
+        "  chromosome BLOB NOT NULL,"
+        "  status TEXT NOT NULL DEFAULT 'pending',"   /* pending|claimed|done */
+        "  fitness REAL,"
+        "  claimed_ts INTEGER,"
+        "  done_ts INTEGER,"
+        "  PRIMARY KEY(gen, idx)"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_indiv_status ON individuals(status);";
+    int rc = sqlite3_exec(g_db, sql, NULL, NULL, NULL);
+    if (rc != SQLITE_OK) die_sqlite("init schema failed", rc);
+}
+
+// Insert/replace all individuals for a generation as pending with their chromosome bytes
+static void db_insert_generation(int gen, Chromosome **pop, int popSize, int geneLength) {
+    int rc;
+    sqlite3_stmt *ins = NULL, *ins_gen = NULL;
+
+    rc = sqlite3_exec(g_db, "BEGIN IMMEDIATE;", NULL, NULL, NULL);
+    if (rc != SQLITE_OK) die_sqlite("BEGIN failed", rc);
+
+    rc = sqlite3_prepare_v2(g_db,
+        "INSERT OR IGNORE INTO generations(gen, created_ts) VALUES(?, strftime('%s','now'));",
+        -1, &ins_gen, NULL);
+    if (rc != SQLITE_OK) die_sqlite("prepare gen insert failed", rc);
+    sqlite3_bind_int(ins_gen, 1, gen);
+    rc = sqlite3_step(ins_gen);
+    if (rc != SQLITE_DONE && rc != SQLITE_CONSTRAINT) die_sqlite("gen insert step failed", rc);
+    sqlite3_finalize(ins_gen);
+
+    rc = sqlite3_prepare_v2(g_db,
+        "INSERT OR REPLACE INTO individuals(gen, idx, chromosome, status) "
+        "VALUES(?, ?, ?, 'pending');",
+        -1, &ins, NULL);
+    if (rc != SQLITE_OK) die_sqlite("prepare indiv insert failed", rc);
+
+    for (int i = 0; i < popSize; ++i) {
+        Chromosome *c = pop[i];
+        sqlite3_bind_int(ins, 1, gen);
+        sqlite3_bind_int(ins, 2, i);
+        // store raw bytes of your bit array
+        sqlite3_bind_blob(ins, 3, (const void*)c->genes, (int)geneLength * (int)sizeof(bit_t), SQLITE_STATIC);
+        rc = sqlite3_step(ins);
+        if (rc != SQLITE_DONE) die_sqlite("individual insert step failed", rc);
+        sqlite3_reset(ins);
+        sqlite3_clear_bindings(ins);
+    }
+    sqlite3_finalize(ins);
+
+    rc = sqlite3_exec(g_db, "COMMIT;", NULL, NULL, NULL);
+    if (rc != SQLITE_OK) die_sqlite("COMMIT failed", rc);
+}
+
+// Update fitness for one individual and mark done
+static void db_update_fitness(int gen, int idx, int fitness) {
+    sqlite3_stmt *upd = NULL;
+    int rc = sqlite3_prepare_v2(g_db,
+        "UPDATE individuals "
+        "SET status='done', fitness=?, done_ts=strftime('%s','now') "
+        "WHERE gen=? AND idx=?;",
+        -1, &upd, NULL);
+    if (rc != SQLITE_OK) die_sqlite("prepare update failed", rc);
+    sqlite3_bind_double(upd, 1, (double)fitness);
+    sqlite3_bind_int(upd, 2, gen);
+    sqlite3_bind_int(upd, 3, idx);
+    rc = sqlite3_step(upd);
+    sqlite3_finalize(upd);
+    if (rc != SQLITE_DONE) die_sqlite("update fitness step failed", rc);
+}
+
+// wait until COUNT(done) == popsize
+static void db_wait_for_generation_done(int gen, int popsize, int poll_ms) {
+    sqlite3_stmt *st = NULL;
+    int rc = sqlite3_prepare_v2(g_db,
+        "SELECT COUNT(*) FROM individuals WHERE gen=? AND status='done';",
+        -1, &st, NULL);
+    if (rc != SQLITE_OK) die_sqlite("prepare wait stmt failed", rc);
+
+    for (;;) {
+        sqlite3_reset(st);
+        sqlite3_clear_bindings(st);
+        sqlite3_bind_int(st, 1, gen);
+        rc = sqlite3_step(st);
+        if (rc != SQLITE_ROW) die_sqlite("wait step failed", rc);
+        int done = sqlite3_column_int(st, 0);
+        if (done >= popsize) { sqlite3_finalize(st); return; }
+        sleep_ms(poll_ms);
+    }
+}
+
+// load fitness back into in-memory population after external eval
+static void db_load_fitnesses_for_gen(int gen, Chromosome **pop, int popsize) {
+    sqlite3_stmt *st = NULL;
+    int rc = sqlite3_prepare_v2(g_db,
+        "SELECT idx, fitness FROM individuals WHERE gen=? AND status='done' ORDER BY idx;",
+        -1, &st, NULL);
+    if (rc != SQLITE_OK) die_sqlite("prepare pull fitness failed", rc);
+
+    sqlite3_bind_int(st, 1, gen);
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        int idx = sqlite3_column_int(st, 0);
+        double fit = sqlite3_column_double(st, 1);
+        if (idx >= 0 && idx < popsize && pop[idx]) pop[idx]->fitness = (int)(fit + 0.5);
+    }
+    if (rc != SQLITE_DONE) die_sqlite("pull fitness step failed", rc);
+    sqlite3_finalize(st);
+
+    // keep your sort order consistent for selection
+    sortPop(pop, popsize);
+}
+
+#include <sys/stat.h>
+
+static int file_exists(const char *p){
+    struct stat st;
+    return (p && stat(p, &st) == 0 && S_ISREG(st.st_mode));
+}
+
+// Returns 1 if there is any row in DB, 0 if empty
+static int db_has_any_rows(void){
+    sqlite3_stmt *st=NULL; int rc, any=0;
+    rc = sqlite3_prepare_v2(g_db, "SELECT 1 FROM individuals LIMIT 1;", -1, &st, NULL);
+    if(rc==SQLITE_OK && sqlite3_step(st)==SQLITE_ROW) any=1;
+    if(st) sqlite3_finalize(st);
+    return any;
+}
+
+// Get latest generation number present in the DB; returns 1 on success
+static int db_get_latest_gen(int *out_gen){
+    sqlite3_stmt *st=NULL; int rc;
+    rc = sqlite3_prepare_v2(g_db, "SELECT MAX(gen) FROM individuals;", -1, &st, NULL);
+    if(rc!=SQLITE_OK) die_sqlite("prepare MAX(gen)", rc);
+    rc = sqlite3_step(st);
+    if(rc==SQLITE_ROW && !sqlite3_column_type(st,0)==SQLITE_NULL){
+        *out_gen = sqlite3_column_int(st,0);
+        sqlite3_finalize(st);
+        return 1;
+    }
+    sqlite3_finalize(st);
+    return 0;
+}
+
+// Count done vs total for a generation
+static void db_counts_for_gen(int gen, int *out_total, int *out_done){
+    sqlite3_stmt *st=NULL; int rc;
+    *out_total=0; *out_done=0;
+    rc = sqlite3_prepare_v2(g_db,
+        "SELECT COUNT(*), SUM(status='done') FROM individuals WHERE gen=?;", -1, &st, NULL);
+    if(rc!=SQLITE_OK) die_sqlite("prepare counts", rc);
+    sqlite3_bind_int(st,1,gen);
+    if(sqlite3_step(st)==SQLITE_ROW){
+        *out_total = sqlite3_column_int(st,0);
+        *out_done  = sqlite3_column_int(st,1);
+    }
+    sqlite3_finalize(st);
+}
+
+// Get pop size and geneLength for a generation
+static void db_get_shape_for_gen(int gen, int *popsize, int *geneLength){
+    sqlite3_stmt *st=NULL; int rc;
+    *popsize=0; *geneLength=0;
+    // pop size
+    rc = sqlite3_prepare_v2(g_db,
+        "SELECT COUNT(*) FROM individuals WHERE gen=?;", -1, &st, NULL);
+    if(rc!=SQLITE_OK) die_sqlite("prepare popsize", rc);
+    sqlite3_bind_int(st,1,gen);
+    if(sqlite3_step(st)==SQLITE_ROW) *popsize = sqlite3_column_int(st,0);
+    sqlite3_finalize(st);
+    // geneLength from first row blob size
+    rc = sqlite3_prepare_v2(g_db,
+        "SELECT LENGTH(chromosome) FROM individuals WHERE gen=? ORDER BY idx LIMIT 1;", -1, &st, NULL);
+    if(rc!=SQLITE_OK) die_sqlite("prepare geneLength", rc);
+    sqlite3_bind_int(st,1,gen);
+    if(sqlite3_step(st)==SQLITE_ROW) *geneLength = sqlite3_column_int(st,0);
+    sqlite3_finalize(st);
+}
+
+// Ensure in-memory population is allocated to match (re)loaded shape
+static void ensure_population(Chromosome ***pop, int *cur_popsize, int new_popsize, int new_geneLength){
+    if(*pop && *cur_popsize==new_popsize) return; // assume chromosomes already sized
+    // free old if present (simple/free-only version; adjust as you need)
+    if(*pop){
+        for(int i=0;i<*cur_popsize;i++){
+            if((*pop)[i]){
+                free((*pop)[i]->genes);
+                free((*pop)[i]);
+            }
+        }
+        free(*pop);
+    }
+    *pop = (Chromosome**)malloc((size_t)new_popsize*sizeof(Chromosome*));
+    for(int i=0;i<new_popsize;i++){
+        (*pop)[i] = createChromosome(new_geneLength);
+    }
+    *cur_popsize = new_popsize;
+}
+
+// Load chromosomes + fitness from DB into memory
+static void db_load_population_for_gen(int gen, Chromosome **pop, int popsize, int geneLength){
+    sqlite3_stmt *st=NULL; int rc;
+    rc = sqlite3_prepare_v2(g_db,
+        "SELECT idx, chromosome, fitness FROM individuals WHERE gen=? ORDER BY idx;", -1, &st, NULL);
+    if(rc!=SQLITE_OK) die_sqlite("prepare load pop", rc);
+    sqlite3_bind_int(st,1,gen);
+    while((rc=sqlite3_step(st))==SQLITE_ROW){
+        int idx = sqlite3_column_int(st,0);
+        const void *blob = sqlite3_column_blob(st,1);
+        int blen = sqlite3_column_bytes(st,1);
+        double fit = sqlite3_column_type(st,2)==SQLITE_NULL ? 0.0 : sqlite3_column_double(st,2);
+        if(idx>=0 && idx<popsize && pop[idx]){
+            int tocopy = blen < geneLength ? blen : geneLength;
+            memcpy(pop[idx]->genes, blob, (size_t)tocopy);
+            if (tocopy < geneLength) memset(pop[idx]->genes + tocopy, 0, (size_t)(geneLength - tocopy));
+            pop[idx]->fitness = (int)(fit + 0.5);
+        }
+    }
+    if(rc!=SQLITE_DONE) die_sqlite("step load pop", rc);
+    sqlite3_finalize(st);
+    sortPop(pop, popsize);
+}
+
 
 void printChromosomeSingle(const Chromosome *c, int L)
 {
@@ -145,6 +442,19 @@ int evaluate(Chromosome** pop, int (*fitfunc)(const Chromosome *, int), int popS
     }
     sortPop(pop,popSize);
 }
+
+int evaluate_sqlite(Chromosome** pop, int (*fitfunc)(const Chromosome *, int),
+                    int popSize, int geneLength, int generation)
+{
+    for (int i = 0; i < popSize; i++) {
+        pop[i]->fitness = fitfunc(pop[i], geneLength);
+        // NEW: persist fitness to DB
+        if (g_db) db_update_fitness(generation, i, pop[i]->fitness);
+    }
+    sortPop(pop, popSize);
+    return 0;
+}
+
 
 void crossover(const Chromosome *a, const Chromosome *b, Chromosome *c1, int geneLength) {
     int point = rand() % geneLength;
@@ -389,7 +699,9 @@ void removeNumericSuffix(char *s) {
 
 int main(int argc, char **argv)
 {
-    srand(time(NULL));
+    srand((unsigned)time(NULL));
+
+    // defaults (some of these will be overridden by DB if present)
     char path[100] = "checkpoint";
     int resume = 0;
     int geneLength = 64;
@@ -400,99 +712,120 @@ int main(int argc, char **argv)
     int saveEvery = 100;
     double mutation = 0.02;
 
+    const char *db_path = "ga.db";
+    int use_external_eval = 0;
+    int poll_ms = 250;
+
+    // minimal flag parsing
+    for (int i = 1; i < argc; ++i){
+        if (strcmp(argv[i], "--db")==0 && i+1<argc) db_path = argv[++i];
+        else if (strcmp(argv[i], "--external")==0) use_external_eval = 1;
+        else if (strcmp(argv[i], "--poll-ms")==0 && i+1<argc) poll_ms = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--resume")==0 && i+1<argc) resume = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--checkpoint")==0 && i+1<argc) strncpy(path, argv[++i], sizeof(path));
+        // keep your other positional args if you like
+    }
+
     Hyper hyperparm = {
-        generation, //this technically isnt a hyperparamter
-        population,
-        geneLength,
-        elitism,
-        generations, //this is the total generation count
-        saveEvery,
-        mutation
+        generation, population, geneLength, elitism, generations, saveEvery, mutation
     };
-    
-    //import argparse
-    if(argc > 1)
-    {
-        //arguments are 
-        //continue checkpointPath genelength popsize elitism generation saveEvery mutation
-        if(argc >= 2)
-        {
-            resume = atoi(argv[1]);
-        }
-        if(argc >= 3)
-        {
-            strncpy(path, argv[2], sizeof(path));
-        }
-        if(argc >= 4)
-        {
-            hyperparm.geneLength = atoi(argv[3]);
-        }
-        if(argc >= 5)
-        {
-            hyperparm.population = atoi(argv[4]);
-        }
-        if(argc >= 6)
-        {
-            hyperparm.elitism = atoi(argv[5]);
-        }
-        if(argc >= 7)
-        {
-            hyperparm.generations = atoi(argv[6]);
-        }
-        if(argc >= 8)
-        {
-            hyperparm.saveEvery = atoi(argv[7]);
-        }
-        if(argc >= 9)
-        {
-            char* endptr;
-            hyperparm.mutation = strtod(argv[8], &endptr);
+
+    // Open DB (create if missing) and ensure schema
+    db_open(db_path);
+    db_init_schema();
+
+    Chromosome **pop = NULL;
+    int cur_pop = 0;
+
+    if (file_exists(db_path) && db_has_any_rows()){
+        // ---- Resume from latest generation in DB ----
+        int latest = 0;
+        db_get_latest_gen(&latest);
+        int db_pop=0, db_L=0; db_get_shape_for_gen(latest, &db_pop, &db_L);
+        if (db_pop <= 0 || db_L <= 0){
+            fprintf(stderr, "DB exists but has no valid individuals; seeding anew.\n");
+        } else {
+            // adopt DB shape and hyper parameters
+            hyperparm.generation = latest;
+            hyperparm.population = population = db_pop;
+            hyperparm.geneLength = geneLength = db_L;
+            ensure_population(&pop, &cur_pop, population, geneLength);
+            db_load_population_for_gen(latest, pop, population, geneLength);
+
+            int total=0, done=0; db_counts_for_gen(latest, &total, &done);
+            if (done < total){
+                printf("[resume] gen=%d is incomplete (%d/%d done)\n", latest, done, total);
+                if (use_external_eval){
+                    // wait for external workers to finish it
+                    db_wait_for_generation_done(latest, population, poll_ms);
+                    db_load_fitnesses_for_gen(latest, pop, population);
+                } else {
+                    // finish locally
+                    evaluate_sqlite(pop, fitness, population, geneLength, latest);
+                }
+            } else {
+                printf("[resume] gen=%d is complete. Continuing.\n", latest);
+            }
         }
     }
-    Chromosome **pop = malloc((size_t)population * sizeof(Chromosome*));
-    if(resume)
-    {
-        FILE *f = fopen(path, "r");
-        if (!f)
-        {
-            printf("Checkpoint %s does not exist\n", path);
-            return 0;
+
+    // If still no population (new DB), seed a fresh one
+    if (!pop){
+        ensure_population(&pop, &cur_pop, population, geneLength);
+        createPopulation(pop, population, geneLength);
+        // insert seed generation (hyperparm.generation)
+        db_insert_generation(hyperparm.generation, pop, population, geneLength);
+        if (use_external_eval){
+            db_wait_for_generation_done(hyperparm.generation, population, poll_ms);
+            db_load_fitnesses_for_gen(hyperparm.generation, pop, population);
+        } else {
+            evaluate_sqlite(pop, fitness, population, geneLength, hyperparm.generation);
         }
-        loadPopulation(path, pop, &hyperparm);
+        savePopulation(path, pop, &hyperparm);
     }
-    printf("%s training using %s\n", resume ? "Resume" : "New", path);
-    removeNumericSuffix(path);
+
+    printf("Training using DB='%s' (mode=%s)\n", db_path, use_external_eval ? "EXTERNAL" : "LOCAL");
     printf("\tGene Length: %d\n", hyperparm.geneLength);
     printf("\tPopulation: %d\n", hyperparm.population);
     printf("\tElitism: %d\n", hyperparm.elitism);
     printf("\tGenerations: %d\n", hyperparm.generations);
     printf("\tSave Every: %d\n", hyperparm.saveEvery);
     printf("\tMutation Rate: %f\n", hyperparm.mutation);
-    if(hyperparm.elitism < 3)
-    {
+
+    if (hyperparm.elitism < 3){
         printf("Elitism of %d is too low (elitism >= 3)\n", hyperparm.elitism);
+        db_close();
         return 0;
     }
-    createPopulation(pop, population, hyperparm.geneLength);
-    evaluate(pop, fitness, population, hyperparm.geneLength);
-    savePopulation(path, pop, &hyperparm);
-    //loop
-    printf("Starting from generation %d\n", hyperparm.generation);
-    int start = hyperparm.generation+1;
-    for(int i = start;i<=hyperparm.generations;i++)
-    {
+
+    // Start from next generation after whatever we’re at
+    int start = hyperparm.generation + 1;
+    for (int i = start; i <= hyperparm.generations; i++){
         reproduce(pop, hyperparm.elitism, hyperparm.mutation, hyperparm.population, hyperparm.geneLength);
-        evaluate(pop, fitness, hyperparm.population ,hyperparm.geneLength);
-        if(i%saveEvery==0)
-        {
+
+        // Insert the new generation
+        db_insert_generation(i, pop, hyperparm.population, hyperparm.geneLength);
+
+        if (use_external_eval){
+            db_wait_for_generation_done(i, hyperparm.population, poll_ms);
+            db_load_fitnesses_for_gen(i, pop, hyperparm.population);
+        } else {
+            evaluate_sqlite(pop, fitness, hyperparm.population, hyperparm.geneLength, i);
+        }
+
+        if (i % hyperparm.saveEvery == 0){
             char buf[256];
             snprintf(buf, sizeof buf, "%s-%d", path, i);
             hyperparm.generation = i;
             savePopulation(buf, pop, &hyperparm);
         }
     }
-    printf("Trained for %d generations\n", hyperparm.generations);
+
+    db_close();
+
+    printf("Trained through generation %d\n", hyperparm.generations);
     printf("Population:\n---------------------------------------------------------\n");
-    printPopulation(pop, population, geneLength);
+    printPopulation(pop, hyperparm.population, hyperparm.geneLength);
     return 0;
 }
+

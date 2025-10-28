@@ -1,3 +1,3 @@
 #!/bin/bash
 
-gcc -I../include Smarty.c libcAI.so -lm -o Smarty
+gcc -I../include GASmarty.c libcAI.so -lm -o GASmarty
